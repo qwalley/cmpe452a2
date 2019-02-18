@@ -1,9 +1,19 @@
 import numpy as np
 import random as random
 from math import exp as e
-from sklearn.linear_model import Perceptron
 from sklearn.metrics import confusion_matrix
 from pprint import pprint as pprint
+
+# define number of nodes per layer
+input_size = 9
+hidden_size = 7
+output_size = 6
+# learning rate
+c = 0.1
+# momentum coefficient
+alpha = c**2
+# regularization term
+lamb = 0.1
 
 # load raw data from csv file, strip new lines and format as floats
 def load_data (filename):
@@ -72,8 +82,7 @@ def write_2d_array (array, filename):
 		for row in array:
 			line = ''
 			# separate values by comma
-			line += '{:3.0f},'.format(row[0])
-			for i in range(1, len(row) - 1):
+			for i in range(len(row) - 1):
 				line += '{:10.8f},'.format(row[i])
 			# end each line with newline
 			line += '{:1.0f}\n'.format(row[-1])
@@ -82,16 +91,17 @@ def write_2d_array (array, filename):
 
 # computes y = f(a) of node from weights and inputs
 def node_output (inputs, weights):
+	# weight[0] is bias weight
 	activation = weights[0]
 	for i in range(len(inputs)):
-		# weight[0] is bias weight
-		activation += input[i] * weights[i + 1]
+		activation += inputs[i] * weights[i + 1]
 	# compute the simoid(sigmoid?) of the activation
 	output = 1 / (1 + e(-1 * activation))
 	return output
 
 # compute error function e with a tolerance
-def error (d, y):
+def node_error (d, y):
+	# simple error function
 	e = d - y
 	# maybe?
 	tolerance = 0.05
@@ -112,10 +122,77 @@ def decode_d (d):
 		ret[d - 2] = 1
 	return ret
 
-# load and normalize raw data, split into training and testing sets
-data = load_data('GlassData.csv')
-norm_data = normalize_data(data)
-data_sets = split_data(norm_data)
-# write training and testing sets to files
-write_2d_array(data_sets['training'], 'training_glass.csv')
-write_2d_array(data_sets['testing'], 'testing_glass.csv')
+# generate 2D array of random floats
+def random_array (shape, lower, upper):
+	ret = []
+	for j in range(shape[0]):
+		ret.append([random.uniform(lower, upper) for i in range(shape[1])])
+	return np.array(ret)
+
+# delta term for modifying weights between layers 2 and 1
+def delta_oj (d, y):
+	return node_error(d, y) * y * (1 - y)
+
+# delta term for modifying weights between layers 1 and 0
+def delta_hi (dj, yj, wji, y):
+	ret = 0
+	for x in range(len(dj)):
+		ret += delta_oj(dj[x], yj[x]) * wji[x]
+	return ret * y * (1 - y)
+
+# calculate new weights between layers 2 and 1
+def new_delta_wji (weights_ji, old_delta_wji, yj, dj, yi):
+	new_delta_wji = []
+	# L2 regularization terms for each node j
+	l2_array = np.sum(weights_ji**2, axis=1)
+	# L2 term * lambda value
+	regularize = lamb * l2_array
+	# compute momentum values
+	momentum = np.zeros((output_size, hidden_size + 1)) if old_delta_wji == None else alpha * old_delta_wji
+	# add value for bias weight to beginning of yi
+	yi_temp = [1]
+	yi_temp.extend(yi)
+	# for each output node
+	for j in range(len(yj)):
+		# delta_oj is a scalar constant for all weights going to node j
+		doj = delta_oj(dj[j], yj[j])
+		# for each weight ending at node j
+		delta_wj = [ (c * doj * yi_temp[i]) + momentum[j][i] + regularize[j] for i in range(len(yi_temp)) ]
+		# append to entire list
+		new_delta_wji.append(delta_wj)
+	return np.array(new_delta_wji)
+
+
+def train_network ():
+	train_data = load_data('training_glass.csv')
+	test_data = load_data('testing_glass.csv')
+
+	# initialize weights as random floats, including bias weights
+	weights_ih = random_array((hidden_size, input_size + 1), -1 , 1)
+	weights_ji = random_array((output_size, hidden_size + 1), -1 , 1)
+
+	old_delta_wji = None
+	delta_wji = None
+
+	for row in train_data:
+		# separate input pattern from ID and target value
+		xh = row[1: -1]
+		# decode target value
+		dj = decode_d(int(row[-1]))
+		# layer 1 outputs
+		yi = [ node_output(xh, w) for w in weights_ih ]
+		# layer 2 outputs
+		yj = [ node_output(yi, w) for w in weights_ji ]
+		delta_wji = new_delta_wji(weights_ji, old_delta_wji, yj, dj, yi)
+		break
+	pprint(delta_wji)
+
+# # load and normalize raw data, split into training and testing sets
+# data = load_data('GlassData.csv')
+# norm_data = normalize_data(data)
+# data_sets = split_data(norm_data)
+# # write training and testing sets to files
+# write_2d_array(data_sets['training'], 'training_glass.csv')
+# write_2d_array(data_sets['testing'], 'testing_glass.csv')
+
+train_network()
