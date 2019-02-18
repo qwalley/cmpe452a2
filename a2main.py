@@ -11,8 +11,8 @@ output_size = 6
 # learning rate
 c = 0.1
 # momentum coefficient
-alpha = c**2
-# regularization term
+alpha = 0.05
+# regularization coefficient
 lamb = 0.1
 
 # load raw data from csv file, strip new lines and format as floats
@@ -142,7 +142,7 @@ def delta_hi (dj, yj, wji, y):
 
 # calculate new weights between layers 2 and 1
 def new_delta_wji (weights_ji, old_delta_wji, yj, dj, yi):
-	new_delta_wji = []
+	delta_wji = []
 	# L2 regularization terms for each node j
 	l2_array = np.sum(weights_ji**2, axis=1)
 	# L2 term * lambda value
@@ -159,9 +159,30 @@ def new_delta_wji (weights_ji, old_delta_wji, yj, dj, yi):
 		# for each weight ending at node j
 		delta_wj = [ (c * doj * yi_temp[i]) + momentum[j][i] + regularize[j] for i in range(len(yi_temp)) ]
 		# append to entire list
-		new_delta_wji.append(delta_wj)
-	return np.array(new_delta_wji)
+		delta_wji.append(delta_wj)
+	return np.array(delta_wji)
 
+# calculate new weights between layes 1 and 0
+def new_delta_wih (weights_ji, weights_ih, old_delta_wih, yj, dj, yi, xh):
+	delta_wih = []
+	# L2 regularization terms for each node i
+	l2_array = np.sum(weights_ih**2, axis=1)
+	# L2 term * lambda value
+	regularize = lamb * l2_array
+	# compute momentum values
+	momentum = np.zeros((hidden_size, input_size + 1)) if old_delta_wih == None else alpha * old_delta_wih
+	# add value for bias weight to beginning of xh
+	xh_temp = [1]
+	xh_temp.extend(xh)
+	# for each hidden node
+	for i in range(len(yi)):
+		# delta_hi is a scalar constant for all weights going to node i
+		dhi = delta_hi(dj, yj, weights_ji[:, i], yi[i])
+		# for each weight ending at node i
+		delta_wi = [ (c * dhi * xh_temp[h]) + momentum[i][h] + regularize[i] for h in range(len(xh_temp)) ]
+		# append to entire list
+		delta_wih.append(delta_wi)
+	return np.array(delta_wih)
 
 def train_network ():
 	train_data = load_data('training_glass.csv')
@@ -174,6 +195,9 @@ def train_network ():
 	old_delta_wji = None
 	delta_wji = None
 
+	old_delta_wih = None
+	delta_wih = None
+
 	for row in train_data:
 		# separate input pattern from ID and target value
 		xh = row[1: -1]
@@ -184,8 +208,10 @@ def train_network ():
 		# layer 2 outputs
 		yj = [ node_output(yi, w) for w in weights_ji ]
 		delta_wji = new_delta_wji(weights_ji, old_delta_wji, yj, dj, yi)
+		delta_wih = new_delta_wih(weights_ji, weights_ih, old_delta_wih, yj, dj, yi, xh)
 		break
 	pprint(delta_wji)
+	pprint(delta_wih)
 
 # # load and normalize raw data, split into training and testing sets
 # data = load_data('GlassData.csv')
