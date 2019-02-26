@@ -11,9 +11,9 @@ output_size = 6
 # learning rate
 c = 0.1
 # momentum coefficient
-alpha = 0.05
+alpha = 0.01
 # regularization coefficient
-lamb = 0.1
+lamb = 0.001
 
 # load raw data from csv file, strip new lines and format as floats
 def load_data (filename):
@@ -95,8 +95,15 @@ def node_output (inputs, weights):
 	activation = weights[0]
 	for i in range(len(inputs)):
 		activation += inputs[i] * weights[i + 1]
-	# compute the simoid(sigmoid?) of the activation
-	output = 1 / (1 + e(-1 * activation))
+	try:
+		# compute the simoid(sigmoid?) of the activation
+		output = 1 / (1 + e(-1 * activation))
+	except OverflowError:
+		# catch cases where e^-a overflows
+		if activation < 0:
+			output = 0
+		else:
+			output = 1
 	return output
 
 # compute error function e with a tolerance
@@ -104,7 +111,7 @@ def node_error (d, y):
 	# simple error function
 	e = d - y
 	# maybe?
-	tolerance = 0.05
+	tolerance = 0.1
 	# if y is within the tolerance of d
 	if d == 1 and y >= (d - tolerance):
 		e = 0
@@ -113,6 +120,11 @@ def node_error (d, y):
 		e = 0
 	return e
 
+# compute error for a network ouput
+def mse (dj, yj):
+	ej = np.array([ node_error(dj[j], yj[j]) for j in range(len(yj)) ])
+	return np.sum(ej**2)
+
 # decode target value
 def decode_d (d):
 	ret = [0, 0, 0, 0, 0, 0]
@@ -120,6 +132,15 @@ def decode_d (d):
 		ret[d - 1] = 1
 	else:
 		ret[d - 2] = 1
+	return ret
+
+def encode_yj (yj):
+	ret = 0
+	max_index = yj.index(max(yj))
+	if max_index + 1 < 4:
+		ret = max_index + 1
+	else:
+		ret = max_index + 2
 	return ret
 
 # generate 2D array of random floats
@@ -131,7 +152,7 @@ def random_array (shape, lower, upper):
 
 # delta term for modifying weights between layers 2 and 1
 def delta_oj (d, y):
-	return node_error(d, y) * y * (1 - y)
+	return -1 * node_error(d, y) * y * (1 - y)
 
 # delta term for modifying weights between layers 1 and 0
 def delta_hi (dj, yj, wji, y):
@@ -143,21 +164,23 @@ def delta_hi (dj, yj, wji, y):
 # calculate new weights between layers 2 and 1
 def new_delta_wji (weights_ji, old_delta_wji, yj, dj, yi):
 	delta_wji = []
-	# L2 regularization terms for each node j
-	l2_array = np.sum(weights_ji**2, axis=1)
-	# L2 term * lambda value
-	regularize = lamb * l2_array
+	# L2 regularization terms for each weight
+	regularize = np.abs(lamb * weights_ji)
+	# regularize = lamb * (weights_ji**2)
 	# compute momentum values
-	momentum = np.zeros((output_size, hidden_size + 1)) if old_delta_wji == None else alpha * old_delta_wji
+	momentum = np.zeros((output_size, hidden_size + 1)) if len(old_delta_wji) == 0 else alpha * old_delta_wji
 	# add value for bias weight to beginning of yi
 	yi_temp = [1]
 	yi_temp.extend(yi)
 	# for each output node
 	for j in range(len(yj)):
-		# delta_oj is a scalar constant for all weights going to node j
-		doj = delta_oj(dj[j], yj[j])
-		# for each weight ending at node j
-		delta_wj = [ (c * doj * yi_temp[i]) + momentum[j][i] + regularize[j] for i in range(len(yi_temp)) ]
+		if node_error(dj[j], yj[j]) > 0:
+			# delta_oj is a scalar constant for all weights going to node j
+			doj = delta_oj(dj[j], yj[j])
+			# for each weight ending at node j
+			delta_wj = [ (c * doj * yi_temp[i]) + momentum[j][i] + regularize[j][i] for i in range(len(yi_temp)) ]
+		else:
+			delta_wj = [ 0 for x in range(len(yi_temp)) ]
 		# append to entire list
 		delta_wji.append(delta_wj)
 	return np.array(delta_wji)
@@ -165,12 +188,11 @@ def new_delta_wji (weights_ji, old_delta_wji, yj, dj, yi):
 # calculate new weights between layes 1 and 0
 def new_delta_wih (weights_ji, weights_ih, old_delta_wih, yj, dj, yi, xh):
 	delta_wih = []
-	# L2 regularization terms for each node i
-	l2_array = np.sum(weights_ih**2, axis=1)
-	# L2 term * lambda value
-	regularize = lamb * l2_array
+	# # L2 regularization terms for each weight
+	regularize = np.abs(lamb * weights_ih)
+	# regularize = lamb * (weights_ih**2)
 	# compute momentum values
-	momentum = np.zeros((hidden_size, input_size + 1)) if old_delta_wih == None else alpha * old_delta_wih
+	momentum = np.zeros((hidden_size, input_size + 1)) if len(old_delta_wih) == 0 else alpha * old_delta_wih
 	# add value for bias weight to beginning of xh
 	xh_temp = [1]
 	xh_temp.extend(xh)
@@ -179,7 +201,7 @@ def new_delta_wih (weights_ji, weights_ih, old_delta_wih, yj, dj, yi, xh):
 		# delta_hi is a scalar constant for all weights going to node i
 		dhi = delta_hi(dj, yj, weights_ji[:, i], yi[i])
 		# for each weight ending at node i
-		delta_wi = [ (c * dhi * xh_temp[h]) + momentum[i][h] + regularize[i] for h in range(len(xh_temp)) ]
+		delta_wi = [ (c * dhi * xh_temp[h]) + momentum[i][h] + regularize[i][h] for h in range(len(xh_temp)) ]
 		# append to entire list
 		delta_wih.append(delta_wi)
 	return np.array(delta_wih)
@@ -191,27 +213,70 @@ def train_network ():
 	# initialize weights as random floats, including bias weights
 	weights_ih = random_array((hidden_size, input_size + 1), -1 , 1)
 	weights_ji = random_array((output_size, hidden_size + 1), -1 , 1)
+	# save initial weights to file
+	write_2d_array(weights_ih, 'initial_ih_weights.csv')
+	write_2d_array(weights_ji, 'initial_ji_weights.csv')
 
-	old_delta_wji = None
-	delta_wji = None
+	old_delta_wji = []
+	delta_wji = []
 
-	old_delta_wih = None
-	delta_wih = None
+	old_delta_wih = []
+	delta_wih = []
 
-	for row in train_data:
-		# separate input pattern from ID and target value
-		xh = row[1: -1]
-		# decode target value
-		dj = decode_d(int(row[-1]))
-		# layer 1 outputs
-		yi = [ node_output(xh, w) for w in weights_ih ]
-		# layer 2 outputs
-		yj = [ node_output(yi, w) for w in weights_ji ]
-		delta_wji = new_delta_wji(weights_ji, old_delta_wji, yj, dj, yi)
-		delta_wih = new_delta_wih(weights_ji, weights_ih, old_delta_wih, yj, dj, yi, xh)
-		break
-	pprint(delta_wji)
-	pprint(delta_wih)
+	training_mse = []
+	testing_mse = []
+	error_count = []
+
+	for epoch in range(500):
+		training_mse.append(0)
+		testing_mse.append(0)
+		error_count.append(0)
+		
+		for row in train_data:
+			# separate input pattern from ID and target value
+			xh = row[1: -1]
+			# decode target value
+			dj = decode_d(int(row[-1]))
+			# layer 1 outputs
+			yi = [ node_output(xh, w) for w in weights_ih ]
+			# layer 2 outputs
+			yj = [ node_output(yi, w) for w in weights_ji ]
+
+			# update MSE for current epoch
+			training_mse[epoch] += mse(dj, yj)
+
+			# compute changes in weights
+			delta_wji = new_delta_wji(weights_ji, old_delta_wji, yj, dj, yi)
+			delta_wih = new_delta_wih(weights_ji, weights_ih, old_delta_wih, yj, dj, yi, xh)
+
+			# save new weights
+			weights_ih = weights_ih - delta_wih
+			weights_ji = weights_ji - delta_wji
+			# save weight changes
+			old_delta_wih = delta_wih
+			old_delta_wji = delta_wji
+
+		for row in test_data:
+			# separate input pattern from ID and target value
+			xh = row[1: -1]
+			# decode target value
+			dj = decode_d(int(row[-1]))
+			# layer 1 outputs
+			yi = [ node_output(xh, w) for w in weights_ih ]
+			# layer 2 outputs
+			yj = [ node_output(yi, w) for w in weights_ji ]
+
+			if encode_yj(yj) != int(row[-1]):
+				error_count[epoch] += 1
+
+			# update SSE for current epoch
+			testing_mse[epoch] += mse(dj, yj)
+
+		print 'Training:' + '{:5.4f} '.format(training_mse[epoch]/len(train_data)) + ' Testing:' + '{:5.4f} '.format(testing_mse[epoch]/len(test_data)) + 'Error Count:' + str(error_count[epoch])
+	print 'Training:' + '{:5.4f} '.format(training_mse[0]/len(train_data)) + ' Testing:' + '{:5.4f} '.format(testing_mse[0]/len(test_data)) + 'Error Count:' + str(error_count[0])
+
+	pprint(weights_ji)
+	pprint(weights_ih)
 
 # # load and normalize raw data, split into training and testing sets
 # data = load_data('GlassData.csv')
